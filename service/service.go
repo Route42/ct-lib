@@ -29,6 +29,7 @@ type Service struct {
 	candidate        string
 	startTime        int64
 	numCpu           int
+	peakGoRoutines   int64
 }
 
 // submit valid result
@@ -95,6 +96,9 @@ func (service *Service) Wait() {
 	msg := fmt.Sprintf("elapsed %d seconds %d item(s) done which is %.2f per second", timeElapsed, done, numPerSecond)
 	log.Println(msg)
 
+	// profiler data
+	numRoutines := int64(runtime.NumGoroutine())
+
 	// send
 	service.sendData(map[string]interface{}{
 		"type":        "finishedAttempt",
@@ -102,6 +106,7 @@ func (service *Service) Wait() {
 		"rate":        numPerSecond,
 		"done":        done,
 		"timeElapsed": timeElapsed,
+		"numRoutines": numRoutines,
 	})
 }
 
@@ -118,7 +123,7 @@ func (service *Service) Work() (result *Result, err error) {
 	makeExpensive(1000)
 
 	// very slow (which needs timeout pattern)
-	if newCounterValue > 200 {
+	if newCounterValue > 200 && rand.Intn(50) == 1 {
 		time.Sleep(60 * time.Second)
 	}
 
@@ -211,6 +216,18 @@ func (service *Service) sendData(m map[string]interface{}) {
 		log.Printf("non-200 status %d", res.StatusCode)
 	}
 }
+func (service *Service) startProfiler() {
+	ticker := time.NewTicker(500 * time.Millisecond)
+	go func() {
+		for _ = range ticker.C {
+			numRoutines := int64(runtime.NumGoroutine())
+			peakOld := atomic.LoadInt64(&service.peakGoRoutines)
+			if numRoutines > peakOld {
+				atomic.StoreInt64(&service.peakGoRoutines, numRoutines)
+			}
+		}
+	}()
+}
 
 func makeExpensive(ms int) {
 	// expensive..
@@ -232,6 +249,9 @@ func New(candidate string) *Service {
 		startTime: time.Now().Unix(),
 		numCpu:    runtime.NumCPU(),
 	}
+
+	// profiler
+	s.startProfiler()
 
 	// start
 	s.sendData(map[string]interface{}{
