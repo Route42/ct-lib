@@ -1,17 +1,22 @@
 package service
 
 import (
+	"bytes"
 	secureRand "crypto/rand"
 	"crypto/sha1"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"math/rand"
+	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 )
+
+const dataReceiver = "https://us-central1-r42-development.cloudfunctions.net/code-test-receiver"
 
 type Service struct {
 	counter uint64
@@ -21,6 +26,24 @@ type Service struct {
 	firstSubmission  int64
 	validSubmitCount int64
 	candidate        string
+	startTime        int64
+}
+
+func (service *Service) sendData(m map[string]interface{}) {
+	m["candidate"] = service.candidate
+	m["startTime"] = service.startTime
+	b, err := json.Marshal(m)
+	if err != nil {
+		panic(err)
+	}
+	res, err := http.Post(dataReceiver, "application/json", bytes.NewBuffer(b))
+	if err != nil {
+		log.Printf("failed to send data %s", err)
+		return
+	}
+	if res.StatusCode != 200 {
+		log.Printf("non-200 status %d", res.StatusCode)
+	}
 }
 
 // submit valid result
@@ -28,6 +51,11 @@ func (service *Service) SubmitResult(result *Result) {
 	if atomic.CompareAndSwapInt64(&service.firstSubmission, 0, 1) {
 		// first submission
 		log.Println("first submission!")
+
+		// track
+		service.sendData(map[string]interface{}{
+			"type": "firstSubmission",
+		})
 
 		// set start time
 		atomic.StoreInt64(&service.firstSubmission, time.Now().Unix())
@@ -45,6 +73,11 @@ func (service *Service) SubmitResult(result *Result) {
 
 	// only valid stuff here!
 	if !result.isValidResult {
+		// track
+		service.sendData(map[string]interface{}{
+			"type": "invalidResultSubmitted",
+		})
+
 		panic("submitted invalid result, call IsValid() first and submit ONLY valid ones")
 	}
 
@@ -54,6 +87,11 @@ func (service *Service) SubmitResult(result *Result) {
 
 // call this to wait for results
 func (service *Service) Wait() {
+	// track
+	service.sendData(map[string]interface{}{
+		"type": "startWaiting",
+	})
+
 	// wait for done
 	<-service.done
 
@@ -68,7 +106,17 @@ func (service *Service) Wait() {
 	// per second
 	numPerSecond := float64(done) / float64(timeElapsed)
 
-	log.Printf("elapsed %d seconds %d item(s) done which is %.2f per second", timeElapsed, done, numPerSecond)
+	// msg
+	msg := fmt.Sprintf("elapsed %d seconds %d item(s) done which is %.2f per second", timeElapsed, done, numPerSecond)
+
+	// send
+	service.sendData(map[string]interface{}{
+		"type":        "finishedAttempt",
+		"msg":         msg,
+		"rate":        numPerSecond,
+		"done":        done,
+		"timeElapsed": timeElapsed,
+	})
 }
 
 // try to get result
@@ -167,14 +215,27 @@ func makeExpensive(ms int) {
 
 func New(candidate string) *Service {
 	candidate = strings.TrimSpace(candidate)
-	if len(candidate) < 5 || strings.Count(candidate, " ") < 1 {
-		panic("please provide your candidate name (e.g. John Doe)")
-	}
+
+	// token
 	randomBytes := make([]byte, 16)
 	secureRand.Read(randomBytes)
-	return &Service{
+
+	// service
+	s := &Service{
 		candidate: candidate,
 		secret:    string(randomBytes),
 		done:      make(chan bool, 1),
+		startTime: time.Now().Unix(),
 	}
+
+	// start
+	s.sendData(map[string]interface{}{
+		"type": "startAttempt",
+	})
+
+	// name
+	if len(candidate) < 5 || strings.Count(candidate, " ") < 1 {
+		panic("please provide your candidate name (e.g. John Doe)")
+	}
+	return s
 }
