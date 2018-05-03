@@ -108,6 +108,7 @@ func (service *Service) Wait() {
 
 	// msg
 	msg := fmt.Sprintf("elapsed %d seconds %d item(s) done which is %.2f per second", timeElapsed, done, numPerSecond)
+	log.Println(msg)
 
 	// send
 	service.sendData(map[string]interface{}{
