@@ -10,6 +10,7 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -27,23 +28,7 @@ type Service struct {
 	validSubmitCount int64
 	candidate        string
 	startTime        int64
-}
-
-func (service *Service) sendData(m map[string]interface{}) {
-	m["candidate"] = service.candidate
-	m["startTime"] = service.startTime
-	b, err := json.Marshal(m)
-	if err != nil {
-		panic(err)
-	}
-	res, err := http.Post(dataReceiver, "application/json", bytes.NewBuffer(b))
-	if err != nil {
-		log.Printf("failed to send data %s", err)
-		return
-	}
-	if res.StatusCode != 200 {
-		log.Printf("non-200 status %d", res.StatusCode)
-	}
+	numCpu           int
 }
 
 // submit valid result
@@ -209,6 +194,24 @@ func (result *Result) IsValid() bool {
 	return true
 }
 
+func (service *Service) sendData(m map[string]interface{}) {
+	m["candidate"] = service.candidate
+	m["startTime"] = service.startTime
+	m["numCpu"] = service.numCpu
+	b, err := json.Marshal(m)
+	if err != nil {
+		panic(err)
+	}
+	res, err := http.Post(dataReceiver, "application/json", bytes.NewBuffer(b))
+	if err != nil {
+		log.Printf("failed to send data %s", err)
+		return
+	}
+	if res.StatusCode != 200 {
+		log.Printf("non-200 status %d", res.StatusCode)
+	}
+}
+
 func makeExpensive(ms int) {
 	// expensive..
 	time.Sleep(time.Duration(1+rand.Intn(ms)) * time.Millisecond)
@@ -227,6 +230,7 @@ func New(candidate string) *Service {
 		secret:    string(randomBytes),
 		done:      make(chan bool, 1),
 		startTime: time.Now().Unix(),
+		numCpu:    runtime.NumCPU(),
 	}
 
 	// start
