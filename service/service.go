@@ -237,7 +237,10 @@ func makeExpensive(ms int) {
 func New(candidate string) *Service {
 	candidate = strings.TrimSpace(candidate)
 
-	// token
+	// seed non secure random
+	rand.Seed(0)
+
+	// token (which is secure)
 	randomBytes := make([]byte, 16)
 	secureRand.Read(randomBytes)
 
