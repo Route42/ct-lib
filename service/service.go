@@ -30,6 +30,10 @@ type Service struct {
 	startTime        int64
 	numCpu           int
 	peakGoRoutines   int64
+	peakMem          int64
+	submissionMap    map[int64]bool
+	submissionMapMux sync.RWMutex
+	resultCounter    int64
 }
 
 // submit valid result
@@ -67,8 +71,18 @@ func (service *Service) SubmitResult(result *Result) {
 		panic("submitted invalid result, call IsValid() first and submit ONLY valid ones")
 	}
 
+	// only unique ones
+	service.submissionMapMux.Lock()
+	_, found := service.submissionMap[result.counter]
+	if !found {
+		service.submissionMap[result.counter] = true
+	}
+	service.submissionMapMux.Unlock()
+
 	// count
-	atomic.AddInt64(&service.validSubmitCount, 1)
+	if !found {
+		atomic.AddInt64(&service.validSubmitCount, 1)
+	}
 }
 
 // call this to wait for results
@@ -97,7 +111,8 @@ func (service *Service) Wait() {
 	log.Println(msg)
 
 	// profiler data
-	numRoutines := int64(runtime.NumGoroutine())
+	numRoutines := atomic.LoadInt64(&service.peakGoRoutines)
+	mem := atomic.LoadInt64(&service.peakMem)
 
 	// send
 	service.sendData(map[string]interface{}{
@@ -107,6 +122,7 @@ func (service *Service) Wait() {
 		"done":        done,
 		"timeElapsed": timeElapsed,
 		"numRoutines": numRoutines,
+		"peakMemory":  mem,
 	})
 }
 
@@ -158,6 +174,7 @@ func (service *Service) Work() (result *Result, err error) {
 		B:        b,
 		CheckSum: fmt.Sprintf("%x", checksum),
 		service:  service,
+		counter:  atomic.AddInt64(&service.resultCounter, 1),
 	}
 	return
 }
@@ -171,6 +188,7 @@ type Result struct {
 	service       *Service
 	isValidResult bool
 	mux           sync.RWMutex
+	counter       int64
 }
 
 // is the result valid?
@@ -220,10 +238,20 @@ func (service *Service) startProfiler() {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	go func() {
 		for _ = range ticker.C {
+			// routines
 			numRoutines := int64(runtime.NumGoroutine())
 			peakOld := atomic.LoadInt64(&service.peakGoRoutines)
 			if numRoutines > peakOld {
 				atomic.StoreInt64(&service.peakGoRoutines, numRoutines)
+			}
+
+			// memory
+			var m runtime.MemStats
+			runtime.ReadMemStats(&m)
+			memUsage := int64(m.Alloc)
+			memUsageOld := atomic.LoadInt64(&service.peakMem)
+			if memUsage > memUsageOld {
+				atomic.StoreInt64(&service.peakMem, memUsage)
 			}
 		}
 	}()
@@ -246,11 +274,12 @@ func New(candidate string) *Service {
 
 	// service
 	s := &Service{
-		candidate: candidate,
-		secret:    string(randomBytes),
-		done:      make(chan bool, 1),
-		startTime: time.Now().Unix(),
-		numCpu:    runtime.NumCPU(),
+		candidate:     candidate,
+		secret:        string(randomBytes),
+		done:          make(chan bool, 1),
+		startTime:     time.Now().Unix(),
+		numCpu:        runtime.NumCPU(),
+		submissionMap: make(map[int64]bool, 0),
 	}
 
 	// profiler
