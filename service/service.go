@@ -10,6 +10,7 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"os"
 	"runtime"
 	"strings"
 	"sync"
@@ -68,7 +69,8 @@ func (service *Service) SubmitResult(result *Result) {
 			"type": "invalidResultSubmitted",
 		})
 
-		panic("submitted invalid result, call IsValid() first and submit ONLY valid ones")
+		log.Println("submitted invalid result, call IsValid() first and submit ONLY valid ones, exiting fatal error")
+		os.Exit(1)
 	}
 
 	// only unique ones
